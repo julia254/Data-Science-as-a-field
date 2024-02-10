@@ -1,0 +1,492 @@
+---
+title: "Estimating mortality from COVID-19"
+output: html_document
+date: "2024-02-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(janitor)
+library(plotly)
+
+```
+
+
+
+
+# Introduction
+
+When the declaration of a public health emergency marked the onset of the COVID-19 pandemic, the pressing concern on everyone's mind revolved around the severity of the novel pathogen, SARS-COV-2. Two critical metrics dominated discussions in media coverage: the risk of dying from COVID-19 and the risk of dying following infection. 
+
+
+Epidemiologists tackle these metrics using Crude Mortality Ratio which estimates the proportion of deaths within a specified population. This ratio is defined as the number of deaths per 100,000 population for the indicated year. Two additional measures also emerge in the understanding of mortality risk. The Infection Fatality Ratio (IFR) and Case Fatality Ratio (CFR). While the IFR best estimates the true severity of a disease, its computation remains challenging, contingent upon accurate knowledge of both actual cases and actual deaths. Given the inherent uncertainties of COVID-19 data reporting, estimating the IFR proves untenable. Several factors contribute to this limitation: 
+
+1. Varying approaches to defining COVID-19 cases and deaths among different countries lead to discrepancies in reported values.
+2. Asymptomatic or mildly symptomatic cases often go unreported, skewing the true infection rate (number of confirmed cases).
+3. Under-served populations lacking access to healthcare and testing facilities remain underrepresented in official statistics.
+4. Early in the pandemic, limited testing capacity restricted clinical assessments primarily to severe cases and priority groups.
+5. Misdiagnoses, particularly among diseases with similar clinical presentations, further confound accurate reporting.
+6. The heterogeneous impact of COVID-19, influenced by factors such as age, sex, underlying health conditions, and other independent risk factors, complicates the interpretation of fatality ratios, masking disparities among different demographic and risk groups.
+
+Having outlined the complexities of estimating mortality from COVID-19, this analysis will illustrate key trends and patterns in mortality ratios and provide understanding of the pandemic's impact across different populations and regions. I will also be reproducing the figures and graphs published in the the [Johns Hopkins Mortality Analysis](https://coronavirus.jhu.edu/data/mortality) webpage. 
+
+$~$
+
+## About the Data
+Data is from the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University (JHU), it is publicly available on the CSSE's [github data repository](https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series).JHU collected and reported daily COVID cases, deaths, and recoveries from multiple sources around the globe until March 10, 2023, the data is aggregated in the daily time series summary tables. I selected two time series tables for the US confirmed cases and deaths, reported at the county level and two other time series tables are for the global confirmed cases and deaths. The global records are reported at the province-state level for some of the countries. 
+
+Statistical methods for mortality are adapted from the [World Health Organization.](https://iris.who.int/bitstream/handle/10665/333642/WHO-2019-nCoV-Sci_Brief-Mortality-2020.1-eng.pdf?sequence=1)
+
+
+$~$
+
+# Import Data 
+
+```{r}
+base_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+
+file_names <- c(
+  "time_series_covid19_confirmed_US.csv",  # daily confirmed cases in the US
+  "time_series_covid19_deaths_US.csv",       # daily deaths in the US
+  "time_series_covid19_confirmed_global.csv", # daily global confirmed cases 
+  "time_series_covid19_deaths_global.csv"     # daily global deaths
+)
+
+US_cases_wide <- read_csv( paste0(base_url, "/", file_names[1]), 
+                           show_col_types = FALSE ) %>% clean_names()
+
+US_deaths_wide <- read_csv(paste0(base_url, "/", file_names[2]), 
+                           show_col_types = FALSE ) %>% clean_names()
+
+global_cases_wide <- read_csv(paste0(base_url, "/", file_names[3]), 
+                              show_col_types = FALSE) %>% clean_names()
+
+global_deaths_wide <- read_csv(paste0(base_url, "/",  file_names[4]),
+                               show_col_types = FALSE ) %>% clean_names()
+
+
+look_up_table <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+look_up_table <- read_csv(look_up_table, show_col_types = FALSE ) %>% clean_names()
+
+
+```
+
+$~$
+
+# Tidy Data 
+
+
+```{r}
+
+# display each daily observation in a single row. 
+# Clean the dates column and convert into date object 
+
+
+US_cases <- 
+  US_cases_wide %>% 
+  pivot_longer(cols = matches("^x\\d+_"),
+               names_to = "dates",
+               values_to = "cases")  %>% 
+  mutate(dates = str_replace(dates, "x", ""),
+         dates = mdy(dates)) 
+  
+
+US_deaths <- 
+  US_deaths_wide %>% 
+  pivot_longer(cols = matches("^x\\d+_"),
+               names_to = "dates",
+               values_to = "deaths") %>% 
+  mutate(dates = str_replace(dates, "x", ""),
+         dates = mdy(dates))  
+
+
+global_cases <- 
+  global_cases_wide %>% 
+  pivot_longer(cols = matches("^x\\d+_"),
+               names_to = "dates",
+               values_to = "cases") %>% 
+  mutate(dates = str_replace(dates, "x", ""),
+         dates = mdy(dates))  
+
+
+global_deaths <- 
+  global_deaths_wide %>% 
+  pivot_longer(cols = matches("^x\\d+_"),
+               names_to = "dates",
+               values_to = "deaths")  %>% 
+  mutate(dates = str_replace(dates, "x", ""),
+         dates = mdy(dates)) 
+
+
+# Combine the tables for US cases and death 
+US <- 
+  US_cases %>% 
+  full_join(US_deaths) %>% 
+  filter(cases > 0) %>% 
+  mutate(Year = year(dates))
+
+
+# Combine the tables for global cases and death 
+global <- 
+  global_cases %>% 
+  full_join(global_deaths) %>% 
+  left_join(look_up_table, by = c("province_state", "country_region", "lat", "long" )) %>% 
+  filter(cases > 0) %>% 
+  mutate(Year = year(dates))
+
+
+rm(US_cases_wide, US_deaths_wide, global_cases_wide, global_deaths_wide)
+
+```
+
+$~$
+
+
+# Daily COVID Cases and Deaths 
+
+```{r US Cases and Deaths, fig.height=8, fig.width=12, fig.cap = "Number of COVID cases and deaths increased exponentially between 2020 and 2022, reaching more than 100M and 1M resprectively. The graphs display 3 inflection points, with the stepest points around winter 2021 and 2022. The curve levels off in 2023 leading up to the end of the COVID public health emergency  on May 11, 2023"}
+
+# Daily cases and deaths for US 
+US_by_date <- 
+  US %>%
+  group_by(dates) %>% 
+  summarise(cases = sum(cases),
+            deaths = sum(deaths)) %>% 
+  pivot_longer(names_to = "var",
+               values_to = "counts",
+               cols = cases:deaths)
+
+US_by_date %>%
+  ggplot(aes(x = dates, y=counts, fill = var)) +
+  geom_bar(stat = "identity", width = 0.59, alpha = 0.5) +
+  geom_line(aes(color =var), size = 1.2, show.legend = FALSE) +
+  scale_y_continuous(labels = scales::comma_format()) +
+  facet_wrap(~var, ncol = 1, scales = "free_y") +
+  scale_fill_brewer(palette = "Set2") +
+   scale_color_brewer(palette = "Set2") +
+  labs(x=NULL, y = NULL, 
+       title = "Cumulative COVID-19 Deaths and Cases in the US") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.text.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        title = element_text(size = 18))
+
+ 
+
+```
+
+$~$
+
+```{r Global Cases and deaths, fig.height=8, fig.width=12, fig.cap = "Number of COVID cases and deaths increased exponentially between 2020 and 2022, reaching more than 600M and 6M resprectively. The global cases curve is markedly different in shape when compared to the global death curve. The number of deaths shows steady incline during the pandemic and flattening of the curve around the middle of 2022. The curve for cases displays slow increase and then a sudden rise increase in the number of confirmed cases. This can probably be attributed to increased access to testing worldwide, and reveals possible underreporting of COVID cases." }
+
+
+
+# Daily cases and deaths around the globe
+global_by_date <- 
+  global %>%
+  group_by(dates) %>% 
+  summarise(cases = sum(cases),
+            deaths = sum(deaths))%>% 
+  pivot_longer(names_to = "var",
+               values_to = "counts",
+               cols = cases:deaths)
+
+
+global_by_date %>%
+  ggplot(aes(x = dates, y=counts, fill= var)) +
+  geom_bar(stat = "identity", width=0.55, alpha = 0.5) +
+  geom_line(aes(color =var), size = 1.2, show.legend = FALSE) +
+  scale_y_continuous(labels = scales::comma_format()) +
+  facet_wrap(~var, ncol = 1, scales = "free_y") +
+  scale_fill_brewer(palette = "Set2") +
+  scale_color_brewer(palette = "Set2") +
+  labs(x=NULL, y = NULL, 
+       title = "Cummulative Global COVID-19 Deaths and cases") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.text.x = element_text(size = 16),
+        axis.text.y = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        title = element_text(size = 18))
+
+
+```
+
+$~$
+
+# Mortality Analysis
+
+$~$
+
+## Crude Death Ratio (Deaths per 100 000 population)
+
+Crude death rate, also known as crude mortality rate, measures how many deaths occurred per year for every 100,000 persons in the selected population.  Crude Rate is calculate by dividing the total number of deaths by the total population and multiplying the result by 100,000. The total population for any specified geographical area of interest was estimated by taking the maximum population count reported within a given year. 
+
+$~$
+
+**Crude Death Ratio**
+$$ \text{Crude Death Ratio (CDR)} = \frac{\text{Number of Deaths}}{\text{Total Population}} \times 100,000 $$
+
+$~$
+
+## Case Fatality Ratio (CFR)
+
+https://coronavirus.jhu.edu/data/mortality
+
+The Case Fatality Rate tells us about the risk of death from a disease. This measure is also known as Case Fatality risk or Case Fatality ratio. It is calculated by dividing of the number of confirmed deaths from disease by the number of people diagnosed with the disease (number of confirmed cases). 
+
+According to the World Health Organization, at the early stage of a pandemic, most estimates of fatality ratios were based on cases detected through surveillance and calculated using crude methods, which gave rise to widely variable estimates of CFR by country – from less than 0.1% to over 25%. Since the COVID public health emergency ended in May 11, 2023, COVID is no longer an ongoing epidemic, and therefore it is reasonable to calculate the CFR ratio as described below. This calculation makes two assumptions: 
+
+- Assumption 1: The likelihood of detecting cases and deaths is consistent over the course of the outbreak.
+- Assumption 2: All detected cases have resolved (that is, reported cases have either recovered or died).
+
+$~$
+
+**Case Fatality Ratio**
+$$ \text{Case Fatality Ratio (CFR)} = \frac{\text{Number of Deaths}}{\text{Number of Confirmed Cases}} \times 100$$
+
+$~$
+
+```{r}
+
+# some counties are coded at province-state level
+# This is a quick check 
+
+#x <- 
+#  global %>% 
+#  group_by(country_region, dates) %>% 
+#   filter(n() > 1 )
+
+# Australia, Canada,China,Denmark,France,Netherlands,New-Zealand, United Kingdom 
+# are recorded at the province_state level
+# Sum to get total population for these 8 countries
+
+global_by_date <- 
+  global %>% 
+  group_by(country_region,dates, Year) %>% 
+  summarise(cases = sum(cases),
+            deaths = sum(deaths),
+            population = sum(population))
+
+
+# take the highest number of recorded population within each state per year
+# number of cases and deaths is a cumulative sum 
+# the population figure is not a daily cumulative sum 
+# assuming that is remains relatively stable year to year
+# taking the largest reported population number for each given year 
+# to represent the estimated population count for each state in the US. 
+
+global_totals <- 
+  global_by_date %>% 
+  group_by(country_region, Year) %>% 
+  reframe(cases = max(cases),
+            deaths = max(deaths),
+            population = max(population)) %>% 
+  distinct() %>% 
+  filter(population > 0) %>% 
+  mutate(crude_death_ratio = deaths/population * 100000,
+         case_fatality_ratio = deaths/cases * 100) 
+
+
+# Sum up all the max values at the state level 
+# to get the total US population for a given year
+# then take the sum of the population across the years(2020 - 2023)
+
+global_totals_all <- 
+ global_totals  %>% 
+  group_by(country_region) %>% 
+  reframe(cases = max(cases),
+          deaths = max(deaths),
+          population = max(population)) %>% 
+  mutate(crude_death_ratio = deaths/population  * 100000,
+         case_fatality_ratio = deaths/cases * 100) %>% 
+  filter(deaths > 0) %>% 
+  mutate(grp = case_when(case_fatality_ratio < 0.5 ~ "< 0.5",
+                         case_fatality_ratio > 0.5 & case_fatality_ratio < 1 ~ "0.5-1",
+                         case_fatality_ratio > 1  & case_fatality_ratio < 2 ~ "1-2",
+                         case_fatality_ratio > 2 & case_fatality_ratio < 5 ~ "2-5",
+                         case_fatality_ratio > 5 & case_fatality_ratio < 10 ~ "5-10",
+                         case_fatality_ratio > 10 ~ ">10"))
+
+```
+
+$~$
+
+```{r fig.height=5, fig.width=12, CFR-bar-graph, fig.cap= "Case fatality ratios for twenty countries with that are most affected by COVID-19. These are counties with most deaths in proportion to number of cases." }
+global_totals_all %>%
+  arrange(desc(deaths), desc(cases), desc(case_fatality_ratio)) %>% 
+  filter(country_region != "Korea, North") %>%  #North Korea has only 7 data points
+  slice_head(n = 20)  %>% 
+  ggplot(aes(x = case_fatality_ratio/100, y = reorder(country_region, case_fatality_ratio))) +
+  geom_bar(stat = "identity", fill = '#a6cee3') +
+  geom_text(aes(label = paste(round(case_fatality_ratio, 2), "%")), hjust = 1, color = "#343231", size = 3) +
+  scale_x_continuous(labels = scales::percent) +
+  labs(x = "Mortality: Observed Case Fatality Ratio",
+       y = NULL,
+       title = "Worldwide Case Fatality Ratios: Top 20 Countries") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        panel.grid.major.y = element_blank())
+
+
+```
+
+$~$
+
+```{r fig.cap= "Deaths per 100,00 population for twenty countries with that are most affected by COVID-19. These are counties with most deaths in proportion to the population", fig.height=5, fig.width=12, CDR-Bar_plot}
+global_totals_all %>% 
+  arrange(desc(deaths), desc(population), desc(crude_death_ratio)) %>% 
+ # filter(country_region != "Korea, North") %>%  #North Korea has only 7 data points
+  slice_head(n = 20) %>% 
+  ggplot(aes(x = crude_death_ratio, y = reorder(country_region, crude_death_ratio))) +
+  geom_bar(stat = "identity", fill = '#a6cee3') +
+  geom_text(aes(label = round(crude_death_ratio, 2)), hjust = 1, color = "#343231", size = 3) +
+  #scale_x_continuous(labels = scales::percent) +
+  labs(x = "Mortality: Deaths per 100,000 population",
+       y = NULL,
+       title = "Worldwide Deaths per 100,000: Top 20 Countries") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        panel.grid.major.y = element_blank())
+
+
+```
+
+$~$
+
+# COVID-19 Modeling 
+
+Models have influenced key policy decisions from the onset of the COVID-19 pandemic. They are used to estimate infections rates and mortality rates from COVID-19. Estimates from different models may vary widely since different input values are used in the models, and modelers make different assumptions.
+
+$~$
+
+
+```{r case-fatality-ratio, fig.height=6, fig.width=8, fig.cap= "Case Fatality Ratio for COVID varies widely depending on the country. This can be attributed to differences in healthcare systems, testing capacity, underreporting, and other unknown factors"}
+
+
+fig1 <- global_totals_all %>% 
+  filter(country_region != "Korea, North") %>% 
+  ggplot(aes(x = cases, y = deaths, label = country_region)) +
+  geom_point(aes( color = grp), size = 2.5) +
+    geom_smooth(method = "lm", se = FALSE, color = "black", lwd = 0.5) +
+    scale_color_brewer(palette = "Dark2") +
+    scale_x_continuous(trans = "log10",
+                     labels = scales::comma_format(),
+                      breaks = c(0, 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000,100000000) ) +
+  scale_y_continuous(trans = "log10",
+                     labels = scales::comma_format(),
+                     breaks = c(0, 10, 100, 1000, 10000, 100000, 1000000 )) +
+  labs(x ="Confirmed Cases", 
+       y = "Deaths", 
+       title = "Observed Case-Fatality Ratio",
+      color = "Case Fatality Ratio (%)") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 11) )
+
+ggplotly(fig1, width = 800, height = 600)
+
+
+
+```
+
+$~$
+
+```{r}
+fitlm = lm(deaths ~ cases , data = global_totals_all )
+
+summary(fitlm)
+```
+
+$~$
+
+Linear regression of number of deaths against number of cases shows a positive linear relationship between the two variables. The geom_smooth lm method makes it easy to display this relationship. The value for North Korea was removed from the data for easier visualization. Interpretation of the intercept is not practical, since there cannot be 1493 COVID deaths and zero cases. However, from the cases coefficient, we can extrapolate that for every one-unit increase in cases, deaths are expected to increase by 0.01. Practically speaking, we could interpret this as for every 100 cases, we can expect 1 death. 
+
+While modeling the relationship of cases and deaths using the lm and glm function, I was not able to select a model that produced a best fitting curve. The graph displaying case fatality ratios shows that there are separable sub-groups that can be modeled linearly. The models I selected produced fitted values were negative values and so the data has poorly fitting curves. 
+
+
+$~$
+
+```{r Deaths per 100, fig.height=6, fig.width=8, fig.cap= "Case Mortality Ratio for COVID per country. Countries with larger populations, have higher deaths per 1000,000 population. There is evidence suggesting that there are certain populations that are more likely to be affected by COVID, such age group and individuals with underlying conditions like Obesity."}
+
+fig2 <- 
+global_totals_all %>% 
+  ggplot(aes(x = population, y = deaths, label = country_region)) +
+  geom_point(color = "#1f78b4") +
+  geom_smooth( method = "lm", se = FALSE, color = "red", lty = "dashed") +
+   scale_x_continuous(trans = "log10",
+                     labels = scales::comma_format(), 
+                     breaks = c(0, 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000,100000000, 1000000000) )  +
+  scale_y_continuous(trans = "log10",
+                     labels = scales::comma_format(),
+                     breaks = c(0, 10, 100, 1000, 10000, 100000, 1000000 )) + 
+  labs(y = NULL, 
+  x = "Population",
+  y = "Deaths",
+  title = "Deaths Per 100,000 Population") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.title = element_blank())
+
+
+ggplotly(fig2, width = 800, height = 600)
+
+```
+
+$~$
+
+```{r}
+fitlm = lm(deaths ~ population , data = global_totals_all )
+
+summary(fitlm)
+```
+
+$~$
+
+Linear regression of number of deaths against total country population shows a positive linear relationship between the two variables. The geom_smooth lm method makes it easy to display this relationship. The value for North Korea was removed from the data for easier visualization. Interpretation of the intercept is not practical, since there cannot be 14903 COVID deaths and zero population. However, from the population coefficient, we can extrapolate that for every one-unit increase in population, deaths are expected to increase by 0.0005. Practically speaking, we could interpret this as for every 10000 population, we can expect 5 deaths. 
+
+While modeling the relationship of cases and deaths using the lm and glm function, I was not able to select a model that produced a best fitting curve. The models I selected produced fitted values were negative values and so the data has poorly fitting curves. 
+
+$~$
+
+
+# Potential Sources of Bias in COVID-19 Data Analysis
+
+Detecting COVID-19 cases and deaths inherently introduces biases that fluctuate throughout the pandemic's progression. In the initial stages of the pandemic, cases identified were more likely to be severe or fatal since individuals with pronounced symptoms were more likely to seek hospitalization and testing. Additionally, COVID-19 cases and deaths might go undetected if they are attributed to alternative causes, particularly when an underlying condition complicates the diagnoses. 
+
+Calculations like the case fatality ratio rely on reported cases, disregarding unreported or asymptomatic cases, which were prevalent in COVID-19. Limited testing capacity further exacerbates this discrepancy, making it difficult to accurately determine the actual number of SARS-COV-2 infected population. 
+
+The absence of demographic information and underlying health conditions within this data set presents a significant challenge in the ability to present a comprehensive interpretation of COVID-19's impact and its disparate effects across different populations. 
+
+
+$~$
+
+# Conclusion 
+
+In the context of the COVID-19 pandemic, there exists a wide range of naïve estimations for the Case Fatality Ratio (CFR) which can potentially mislead interpretation and conclusions about the severity and burden of COVID-19. Comparing countries becomes challenging due to the varying levels of clinical detection and official reporting of COVID-19 deaths and cases. Moreover, disparities arise from differences in case definitions, testing methodologies, and case counting approaches adopted by different countries. 
+
+Variations in CFR may also stem from discrepancies in the quality of healthcare services and the timing of interventions introduced during different phases of the illness. Additionally, the demographic profile of patients, including factors such as age, sex, ethnicity, and underlying health conditions, may vary significantly across countries, further complicating cross-country comparisons.
+
+```{r}
+sessionInfo()
+```
+
+
+
+```{r}
+df <- global_totals_all %>%
+  arrange(desc(deaths),desc(cases), desc(crude_death_ratio), desc(case_fatality_ratio))
+```
+
+
