@@ -482,11 +482,3 @@ Variations in CFR may also stem from discrepancies in the quality of healthcare 
 sessionInfo()
 ```
 
-
-
-```{r}
-df <- global_totals_all %>%
-  arrange(desc(deaths),desc(cases), desc(crude_death_ratio), desc(case_fatality_ratio))
-```
-
-
